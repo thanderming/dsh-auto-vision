@@ -1,0 +1,56 @@
+{
+  "name": "dsh-auto-vision",
+  "version": "0.4.1",
+  "type": "module",
+  "description": "Let a text-only model see images by automatically calling a vision model from the same provider.",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "vision",
+    "multimodal",
+    "image",
+    "llm"
+  ],
+  "author": "thanderming (https://github.com/thanderming)",
+  "license": "MIT",
+  "homepage": "https://github.com/thanderming/dsh-auto-vision",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thanderming/dsh-auto-vision.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thanderming/dsh-auto-vision/issues"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "test/*.mjs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-settings"]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "react": "^18.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

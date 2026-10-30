@@ -1,0 +1,6 @@
+# dsh-auto-vision bundle patch
+- insert:
+    - id: auto-vision
+      name: dsh-auto-vision
+      config:
+        timeoutMs: 60000

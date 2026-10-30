@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Auto Vision",
+    "description": "When the selected model cannot see images, automatically asks a vision model on the same provider and feeds its description back."
+  }
+}
