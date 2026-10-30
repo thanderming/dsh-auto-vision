@@ -1,5 +1,7 @@
 # dsh-auto-vision
 
+**English** | [简体中文](README.zh-CN.md)
+
 Let a text-only model see images. When the selected model has no image input, **Auto Vision** asks a vision-capable model on the same provider to read each image, then sends the original request with that description in place of the image.
 
 A DSH plugin. No API keys are stored in or sent by the plugin itself — it uses the credential your provider config already points at.
@@ -50,16 +52,6 @@ The guaranteed group in the picker only lists models whose DSH config declares `
 ```sh
 node test/auto-vision.test.mjs   # 9 tests, no network
 ```
-
-## 中文说明
-
-主模型不支持图片时，自动调用**同一 API 下**可识别图片的模型读取图片，把描述替换进请求后交给主模型；会话历史与界面里的图片不变。
-
-- 安装：`dsh plugin add github:thanderming/dsh-auto-vision`
-- 设置：**设置 → 自动视觉**，选择视觉模型（或保持「自动」）。
-- 密钥不经过本插件：请求时从该 API 已有的凭据引用读取，不写入配置、日志或前端。
-- 图片只发给同一 API 的视觉模型，描述仅缓存在内存中。
-- 局限：只支持同一 API 内的视觉模型；官方 `/models` 不返回模态信息，按名称猜出的候选不保证可用。
 
 ## License
 
