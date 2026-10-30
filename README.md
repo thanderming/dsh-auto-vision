@@ -6,6 +6,12 @@ Let a text-only model see images. When the selected model has no image input, **
 
 A DSH plugin. No API keys are stored in or sent by the plugin itself — it uses the credential your provider config already points at.
 
+## Why this instead of another vision setup
+
+- **No second API to configure.** It reuses the provider you are already talking to — no extra key, base URL or proxy to set up.
+- **No model IDs to look up.** It reads that provider's model list and finds an image-capable one by itself; naming one in Settings is optional.
+- **Fixes the rejected drop.** Dragging an image into a text-only model's input box used to be refused. Now the image is read first, and the same model answers.
+
 ## What it does
 
 - Hooks `llm/stream`: if a request carries image blocks and the selected route is text-only, each image is read by a vision model on the **same provider** and replaced with a text block `[Image #n interpreted by <model>] … [/Image #n]`.
