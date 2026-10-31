@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 
 import z from '@deepseek-ai/schemastery'
 
-export const name = 'dsh-auto-vision'
+export const name = 'dsh-auto-sight'
 export const inject = ['llm', 'settings', 'credentials', 'attachments']
 
 /** The two selection fields are volatile so the Settings page can switch them without a remount. */
