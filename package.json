@@ -1,5 +1,5 @@
 {
-  "name": "dsh-auto-vision",
+  "name": "dsh-auto-sight",
   "version": "0.4.6",
   "type": "module",
   "description": "Let a text-only model see images by automatically calling a vision model from the same provider.",
