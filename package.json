@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-vision",
-  "version": "0.4.1",
+  "version": "0.4.6",
   "type": "module",
   "description": "Let a text-only model see images by automatically calling a vision model from the same provider.",
   "keywords": [
@@ -34,6 +34,7 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
+    "README.md",
     "README.zh-CN.md",
     "test/*.mjs"
   ],

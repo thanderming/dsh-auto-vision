@@ -54,6 +54,7 @@ const providerViews = [
   { ns: 'llm-p', revision: 1, value: { providers: { p: { models: [
     { id: 'vision', name: 'Vision', input: ['text', 'image'] },
     { id: 'text', name: 'Text', input: ['text'] },
+    { id: 'DeepSeek-V4-Flash-Vision-Exp', name: 'DeepSeek-V4-Flash-Vision-Exp' },
   ] } } } },
   { ns: 'llm-q', revision: 2, value: { providers: { q: { models: [
     { id: 'vision2', name: 'Vision 2', input: ['image'] },
@@ -90,9 +91,10 @@ const ctx = {
         return { ok: true, value: [{ id: 'p' }, { id: 'q' }] }
       },
       async discoverModels() {
+        // Deliberately omit q's declared vision2: the official endpoint may
+        // not echo every configured alias, and declared models must still show.
         return { ok: true, value: [
           { id: 'vision', name: 'Vision', inputModalities: ['text', 'image'] },
-          { id: 'vision2', name: 'Vision 2', inputModalities: ['text', 'image'] },
           { id: 'text', name: 'Text', inputModalities: ['text'] },
           { id: 'GLM-4.6V', name: 'GLM-4.6V', inputModalities: ['text', 'image'] },
           { id: 'GLM-5.3', name: 'GLM-5.3', inputModalities: ['text'] },
@@ -133,7 +135,9 @@ const select = findAll(tree, 'select')[0]
 assert.ok(select, 'select rendered')
 assert.equal(select.props.value, 'p|vision')
 const optionValues = findAll(tree, 'option').map((option) => option.props.value)
-assert.deepEqual(optionValues, ['', 'p|vision', 'q|vision2'])
+assert.deepEqual(optionValues, [
+  '', 'p|vision', 'q|vision2', 'p|DeepSeek-V4-Flash-Vision-Exp',
+])
 const checkbox = findAll(tree, 'input').find((node) => node.props.type === 'checkbox')
 assert.ok(checkbox, 'candidate toggle rendered')
 checkbox.props.onChange({ target: { checked: true } })

@@ -15,12 +15,16 @@ A DSH plugin. No API keys are stored in or sent by the plugin itself — it uses
 ## What it does
 
 - Hooks `llm/stream`: if a request carries image blocks and the selected route is text-only, each image is read by a vision model on the **same provider** and replaced with a text block `[Image #n interpreted by <model>] … [/Image #n]`.
-- Picks the vision model automatically (first image-capable model the provider catalog lists), or use the one you choose in **Settings → Auto Vision**.
+- Only steps in when all three are true: the request has at least one `image` block, the main route does not declare `image`, and a vision target resolves on the same provider. Otherwise it passes through untouched.
+- Target order: the model chosen in Settings → other mounted image-capable models on the same provider → name-matched candidates from the official `/models` list. The next group is tried only when the previous one is unavailable or has failed.
+- If the chosen vision model fails, tries the remaining targets in order; the block is marked `after <failed model> failed`. A system notice asks the main model to tell the user which model failed and which one was used.
+- If every mounted vision model fails, queries the provider's official `/models` list, keeps name-matched candidates, and tries them over the direct endpoint. The official list has no modality metadata, so these candidates are not guaranteed to accept images.
+- Sends a model that is not mounted locally, or is known to the adapter as text-only, to the provider's OpenAI-compatible `/chat/completions` endpoint. This requires `baseURL` and a usable `apiKeyEnv` in the provider config.
+- If every vision model fails, inserts `[Image #n could not be interpreted by any vision model: …]` and still asks the main model to report it; the turn continues, and one failed image does not stop the others in the same message.
 - Advertises image input in the model picker for text routes that have a vision sibling, so you can attach an image to them directly.
 - Session history and the UI keep the real image; only the request going to the text model is rewritten.
-- Falls back to the provider's OpenAI-compatible `/chat/completions` endpoint when the chosen model is listed by the official `/models` API but not mounted in the local adapter.
+- The first time an image is successfully read by a model that lacks an image declaration, writes `input: [text, image]` back to the provider's `llm-pi-ai` config for future direct routing. It never probes models the user has not used, and a failed or cancelled request writes nothing.
 - Per-image result cache (128 entries) and in-flight de-duplication; 60 s timeout by default.
-- If an image cannot be read, the turn continues with a `[Image #n could not be interpreted: <reason>]` note instead of failing.
 
 ## Install
 
@@ -32,14 +36,20 @@ Or install it from the plugin marketplace.
 
 ## Settings
 
-**Settings → Auto Vision**: pick the vision model (grouped per provider), or leave it on *Automatic*. The selection applies to the next image request.
+**Settings → Auto Vision**: pick the vision model (grouped per provider), or leave it on *Automatic*. The selection is stored in volatile config and applies to the next image request.
 
 | Config key | Default | Meaning |
 | --- | --- | --- |
-| `visionProvider` / `visionModel` | empty = auto | Model to read images with. A selection made for another provider is ignored. |
+| `visionProvider` / `visionModel` | empty = auto | Model to read images with. A selection made for another provider is ignored; the plugin discovers a target on the provider handling the request instead. |
 | `timeoutMs` | `60000` | Per-image read timeout. |
 
-The guaranteed group in the picker only lists models whose DSH config declares `input: [text, image]`. The official `/models` endpoint exposes no modality metadata, so models shown as *candidates* are matched by name and are not guaranteed to accept images — a wrong pick produces a clear per-image error rather than a broken turn.
+The picker has three groups:
+
+- **Guaranteed**: models whose DSH config declares `input: [text, image]`.
+- **Configured without image input**: models present in the DSH config but not declared as image-capable; shown by name match.
+- **Official candidates**: the `/models` endpoint exposes no modality metadata, so these are name-matched guesses and are collapsed by default.
+
+Once a candidate successfully reads a real user image, the plugin writes `input: [text, image]` back to the provider's `llm-pi-ai` config, so it moves into the guaranteed group next time. This only happens after a real image request, never as a background probe; refresh the Settings page to see the change.
 
 ## Privacy
 
@@ -50,13 +60,16 @@ The guaranteed group in the picker only lists models whose DSH config declares `
 ## Limitations
 
 - Same provider only: a vision model on a different API is not used.
+- The official list exposes only basic fields such as model IDs, not modality metadata; *candidates* are name-matched and may fail. Direct calls also need `baseURL` and a usable `apiKeyEnv` in the provider config.
 - One extra model call per uncached image.
+- Auto-marking modifies the `llm-pi-ai` model config; if several Settings pages edit config concurrently, a revision conflict is possible. That attempt only logs a warning and does not retry, and it does not affect the answer.
 - Image content is treated as untrusted data in the vision prompt (the model is told not to follow instructions found in the image), but the resulting text still flows into your model's context as evidence.
 
 ## Development
 
 ```sh
-node test/auto-vision.test.mjs   # 9 tests, no network
+node --test test/auto-vision.test.mjs   # 14 tests, no network
+node test/client-render.mjs             # client Settings-page smoke test
 ```
 
 ## License

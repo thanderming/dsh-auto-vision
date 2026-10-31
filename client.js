@@ -11,16 +11,17 @@ window.__ModuleLoader__.load({
       intro: '主模型不能识别图片时，自动改用同一 API 下可识别图片的模型读取图片，再把描述反馈给主模型。',
       target: '视觉模型',
       auto: '自动（使用该 API 中第一个支持图片的模型）',
-      hint: '保证组只显示 DSH 配置里声明了 input: [text, image] 的模型。官方 /models 接口不返回模态信息；勾选后可查看仅按名称猜出的官方候选，不保证能调用。',
+      hint: '保证组只显示 DSH 配置里声明了 input: [text, image] 的模型。官方 /models 接口不返回模态信息；勾选后可查看仅按名称猜出的官方候选，不保证能调用。调用失败会先试同一 API 的其他视觉模型，再试官方清单候选，并在最终答复中说明。',
       refresh: '刷新模型列表',
       loading: '正在读取模型…',
       saving: '正在保存…',
       saved: '已保存，下一次图片请求生效。',
       loadFailed: '读取设置失败',
       saveFailed: '保存失败',
-      noModels: '没有找到已声明图片输入的模型。可勾选下方候选，查看官方清单中按名称猜出的模型。',
+      noModels: '没有找到已声明图片输入的模型。下方列出了已配置但按名称匹配的视觉模型；也可勾选官方候选。',
       provider: 'API',
       showCandidates: '显示官方清单中未声明的候选（不保证）',
+      configured: '已配置但未声明图像输入',
       undeclared: '未声明',
     }
     const en = {
@@ -29,16 +30,17 @@ window.__ModuleLoader__.load({
       intro: 'When the main model cannot see images, a vision model on the same API reads them first and its description is fed back.',
       target: 'Vision model',
       auto: 'Automatic (first image-capable model on this API)',
-      hint: 'The guaranteed group only shows models whose DSH config declares input: [text, image]. The official /models endpoint exposes no modality metadata; tick below to see name-matched official candidates, which are not guaranteed to work.',
+      hint: 'The guaranteed group only shows models whose DSH config declares input: [text, image]. The official /models endpoint exposes no modality metadata; tick below to see name-matched official candidates, which are not guaranteed to work. On failure the plugin tries other mounted vision models, then official candidates, and reports the switch in the final answer.',
       refresh: 'Refresh models',
       loading: 'Reading models…',
       saving: 'Saving…',
       saved: 'Saved. Applies to the next image request.',
       loadFailed: 'Could not read settings',
       saveFailed: 'Could not save',
-      noModels: 'No model with a declared image input was found. Tick below to see name-matched official candidates.',
+      noModels: 'No model declares an image input. Configured models matched by name are listed below; official candidates can be shown too.',
       provider: 'API',
       showCandidates: 'Show undeclared official candidates (not guaranteed)',
+      configured: 'Configured without image input',
       undeclared: 'Undeclared',
     }
 
@@ -81,7 +83,9 @@ window.__ModuleLoader__.load({
     }
 
     function groupModels(providers) {
-      return providers.filter((provider) => provider.models.length > 0 || provider.candidates.length > 0)
+      return providers.filter(
+        (provider) => provider.models.length > 0 || provider.configured.length > 0 || provider.candidates.length > 0,
+      )
     }
 
     function routeKey(provider, model) {
@@ -102,6 +106,13 @@ window.__ModuleLoader__.load({
         node = node[key]
       }
       return node
+    }
+
+    function configuredModels(profile) {
+      if (!Array.isArray(profile?.models)) return []
+      return profile.models
+        .filter((model) => model?.id)
+        .map((model) => ({ id: model.id, name: model.name || model.id }))
     }
 
     function imageModels(profile) {
@@ -160,8 +171,12 @@ window.__ModuleLoader__.load({
           return {
             id: provider.provider,
             name: provider.displayName || provider.provider,
-            models: [...declared.values()].filter(
-              (model) => official.length === 0 || unique.has(model.id),
+            // The declared catalog is authoritative: the official endpoint may
+            // omit aliases or vision models entirely, so never hide a model
+            // just because /models did not return it.
+            models: [...declared.values()],
+            configured: configuredModels(profile).filter(
+              (model) => !declared.has(model.id) && isVisionName(model.id),
             ),
             candidates: [...unique.values()].filter(
               (model) => !declared.has(model.id) && isVisionName(model.id),
@@ -239,6 +254,19 @@ window.__ModuleLoader__.load({
           children.push(h('option', { key: route, value: route }, `${model.name} (${provider.name})`))
         }
         options.push(h('optgroup', { key: provider.id, label: `${t('provider')}: ${provider.name}` }, children))
+      }
+      for (const provider of state.providers) {
+        if (provider.configured.length === 0) continue
+        const children = []
+        for (const model of provider.configured) {
+          const route = routeKey(provider.id, model.id)
+          known.add(route)
+          children.push(h('option', { key: route, value: route }, `${model.name} (${provider.name} · ${t('configured')})`))
+        }
+        options.push(h('optgroup', {
+          key: `configured:${provider.id}`,
+          label: `${t('provider')}: ${provider.name} · ${t('configured')}`,
+        }, children))
       }
       if (showCandidates) {
         for (const provider of state.providers) {

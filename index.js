@@ -133,6 +133,51 @@ function providerProfile(ctx, provider) {
   }
 }
 
+const remembering = new Set()
+
+/**
+ * Persist the capability only after this exact model actually read a user
+ * image. We never probe the model catalog on our own; the first successful
+ * image request is the test.
+ */
+async function rememberVisionModel(ctx, target) {
+  if (!target?.undeclared || !ctx.settings?.describe || !ctx.settings?.mutate) return
+  const key = `${target.provider}/${target.model}`
+  if (remembering.has(key)) return
+  remembering.add(key)
+  try {
+    const view = (ctx.settings.describe() || []).find((entry) => entry.ns === PI_AI_NS)
+    const providers = view?.value?.providers
+    if (!providers) return
+    let base
+    let profile
+    if (Array.isArray(providers)) {
+      const index = providers.findIndex((entry) => entry?.id === target.provider)
+      if (index < 0) return
+      base = ['providers', String(index)]
+      profile = providers[index]
+    } else {
+      profile = atPath(providers, [target.provider])
+      if (!profile) return
+      base = ['providers', target.provider]
+    }
+    const models = Array.isArray(profile.models) ? [...profile.models] : []
+    const index = models.findIndex((model) => model?.id === target.model)
+    if (index >= 0) {
+      const input = Array.isArray(models[index].input) ? models[index].input : []
+      if (input.includes('image')) return
+      models[index] = { ...models[index], input: [...new Set(['text', ...input, 'image'])] }
+    } else {
+      models.push({ id: target.model, name: target.displayName || target.model, input: ['text', 'image'] })
+    }
+    await ctx.settings.mutate(PI_AI_NS, [
+      { op: 'set', path: [...base, 'models'], value: models },
+    ])
+  } finally {
+    remembering.delete(key)
+  }
+}
+
 function endpointOf(ctx, provider) {
   const profile = providerProfile(ctx, provider)
   if (typeof profile.baseURL !== 'string' || !profile.baseURL.trim()) return null
@@ -178,20 +223,21 @@ async function officialModels(ctx, provider, signal) {
     }))
 }
 
-/** Ask the adapter catalog for an image-capable model on the same provider. */
-async function discoverTarget(ctx, provider, model) {
+/** Ask the adapter catalog for every other image-capable model on the same provider. */
+async function discoverTargets(ctx, provider, model, exclude) {
   let listed = []
   try {
     listed = await ctx.llm.listModels(provider)
   } catch {
-    return null
+    return []
   }
+  const targets = []
   for (const item of listed || []) {
-    if (!item?.id || item.id === model) continue
+    if (!item?.id || item.id === model || exclude.has(item.id)) continue
     if (!isVisionModel(item)) continue
-    return { provider: item.provider || provider, model: item.id, displayName: item.name }
+    targets.push({ provider: item.provider || provider, model: item.id, displayName: item.name })
   }
-  return null
+  return targets
 }
 
 async function validateTarget(nativeResolve, candidate, provider, signal) {
@@ -199,31 +245,82 @@ async function validateTarget(nativeResolve, candidate, provider, signal) {
   if (candidate.provider !== provider) return null // same API only
   try {
     const info = await nativeResolve(candidate.provider, candidate.model, signal)
-    if (!isVisionModel(info)) return null
+    if (!isVisionModel(info)) {
+      // A configured or official selection can be known to the adapter as
+      // text-only (for example because its model entry omitted `input`), while
+      // the provider still serves images. Keep the direct fallback instead of
+      // silently dropping the user's explicit choice.
+      if (!candidate.direct) return null
+      return {
+        ...candidate,
+        undeclared: true,
+        displayName: candidate.displayName || info?.name || candidate.model,
+      }
+    }
     return {
       ...candidate,
       direct: false,
       displayName: candidate.displayName || info.name || modelKey(candidate.provider, candidate.model),
     }
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason || error
     // The official list can name a model this adapter has not mounted. Such a
     // target is still valid, but it must be called over HTTP directly.
     if (!candidate.direct) return null
     return {
       ...candidate,
+      undeclared: true,
       displayName: candidate.displayName || candidate.model,
     }
   }
 }
 
-async function resolveTarget(ctx, config, nativeResolve, provider, model, signal) {
+async function resolveTargets(ctx, config, nativeResolve, provider, model, signal) {
+  const targets = []
+  const seen = new Set()
   const configured = configuredTarget(config, provider)
   if (configured) {
     const target = await validateTarget(nativeResolve, configured, provider, signal)
-    if (target !== null) return target
+    if (target !== null) {
+      targets.push(target)
+      seen.add(target.model)
+    }
   }
-  const discovered = await discoverTarget(ctx, provider, model)
-  return validateTarget(nativeResolve, discovered, provider, signal)
+  for (const candidate of await discoverTargets(ctx, provider, model, seen)) {
+    if (seen.has(candidate.model)) continue
+    const target = await validateTarget(nativeResolve, candidate, provider, signal)
+    if (target !== null) {
+      targets.push(target)
+      seen.add(target.model)
+    }
+  }
+  return targets
+}
+
+async function resolveTarget(ctx, config, nativeResolve, provider, model, signal) {
+  return (await resolveTargets(ctx, config, nativeResolve, provider, model, signal))[0] || null
+}
+
+/** Last-resort candidates from the provider's official `/models` list. */
+async function resolveOfficialTargets(ctx, provider, model, seen, signal) {
+  let listed = []
+  try {
+    listed = await officialModels(ctx, provider, signal)
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason || error
+    return []
+  }
+  const targets = []
+  for (const item of listed || []) {
+    if (!item?.id || item.id === model || seen.has(item.id)) continue
+    if (!isVisionModel(item)) continue
+    // The adapter may map this id to a text-only config or not know it at all.
+    // Either way the official endpoint is the last resort; a wrong guess fails
+    // with a clear per-model error and the loop moves on.
+    targets.push({ provider, model: item.id, displayName: item.name, direct: true, undeclared: true })
+    seen.add(item.id)
+  }
+  return targets
 }
 
 /** Call an official-list model that the DSH adapter has not mounted. */
@@ -344,8 +441,48 @@ async function readImage(ctx, block, target, prompt, signal, timeoutMs) {
   }
 }
 
-async function convertMessages(ctx, messages, target, config, signal) {
+async function readImageAny(ctx, block, targets, prompt, signal, timeoutMs, moreTargets) {
+  const failures = []
+  const queue = [...targets]
+  let next = moreTargets
+  for (let index = 0; ; ) {
+    if (index >= queue.length) {
+      if (typeof next !== 'function') break
+      const extra = await next()
+      next = null
+      if (!Array.isArray(extra) || extra.length === 0) break
+      const start = queue.length
+      queue.push(...extra)
+      index = start
+      continue
+    }
+    const target = queue[index]
+    index += 1
+    if (signal?.aborted) throw signal.reason || new Error('aborted')
+    try {
+      const evidence = await readImage(ctx, block, target, prompt, signal, timeoutMs)
+      if (target.undeclared) {
+        try {
+          await rememberVisionModel(ctx, target)
+        } catch (error) {
+          console.warn(`[dsh-auto-vision] could not remember ${target.model}: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      return { evidence, target, failures }
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error
+      failures.push({ target, reason: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  const details = failures.map((failure) => `${failure.target.displayName}: ${failure.reason}`).join('; ')
+  const error = new Error(`all vision models failed (${details})`)
+  error.failures = failures
+  throw error
+}
+
+async function convertMessages(ctx, messages, targets, config, signal, moreTargets) {
   const converted = []
+  const notices = []
   for (const message of messages || []) {
     if (!Array.isArray(message?.content) || !message.content.some((block) => block?.type === 'image')) {
       converted.push(message)
@@ -361,22 +498,35 @@ async function convertMessages(ctx, messages, target, config, signal) {
       }
       index += 1
       try {
-        const evidence = await readImage(ctx, block, target, prompt, signal, timeoutOf(config))
+        const result = await readImageAny(ctx, block, targets, prompt, signal, timeoutOf(config), moreTargets)
+        const used = result.target.displayName
+        const failed = result.failures.map((failure) => failure.target.displayName)
+        if (failed.length > 0) {
+          const reasons = result.failures
+            .map((failure) => `${failure.target.displayName}（${String(failure.reason).slice(0, 160)}）`)
+            .join('、')
+          notices.push(`图片 #${index}：视觉模型 ${reasons} 调用失败，已改用 ${used}。`)
+        }
         content.push({
           type: 'text',
-          text: `\n\n[Image #${index} interpreted by ${target.displayName}]\n${evidence}\n[/Image #${index}]\n\n`,
+          text: `\n\n[Image #${index} interpreted by ${used}${failed.length > 0 ? ` after ${failed.join(', ')} failed` : ''}]\n${result.evidence}\n[/Image #${index}]\n\n`,
         })
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error)
+        if (signal?.aborted) throw signal.reason || error
+        const failures = Array.isArray(error?.failures) ? error.failures : []
+        const details = failures.length > 0
+          ? failures.map((failure) => `${failure.target.displayName}: ${failure.reason}`).join('; ')
+          : error instanceof Error ? error.message : String(error)
+        notices.push(`图片 #${index}：所有视觉模型均调用失败（${details}）。`)
         content.push({
           type: 'text',
-          text: `\n\n[Image #${index} could not be interpreted by ${target.displayName}: ${reason}]\n\n`,
+          text: `\n\n[Image #${index} could not be interpreted by any vision model: ${details}]\n\n`,
         })
       }
     }
     converted.push({ ...message, content })
   }
-  return converted
+  return { messages: converted, notices }
 }
 
 function installCapabilityOverlay(ctx, config, nativeResolve) {
@@ -410,19 +560,50 @@ function installStreamBridge(ctx, config, nativeResolve) {
         return
       }
 
-      const target = await resolveTarget(ctx, config, nativeResolve, options.provider, options.model, options.signal)
-      if (target === null) {
-        yield* next()
-        return
+      let targets = await resolveTargets(ctx, config, nativeResolve, options.provider, options.model, options.signal)
+      const seen = new Set(targets.map((target) => target.model))
+      let officialPromise
+      const officialFallback = () => {
+        officialPromise ||= resolveOfficialTargets(
+          ctx,
+          options.provider,
+          options.model,
+          seen,
+          options.signal,
+        )
+        return officialPromise
+      }
+      let moreTargets = null
+      if (targets.length === 0) {
+        const official = await officialFallback()
+        if (official.length === 0) {
+          yield* next()
+          return
+        }
+        targets = official
+      } else {
+        // Only hit the official `/models` endpoint when every mounted vision
+        // model has already failed.
+        moreTargets = officialFallback
       }
 
       try {
-        const messages = await convertMessages(ctx, options.messages, target, config, options.signal)
+        const { messages, notices } = await convertMessages(ctx, options.messages, targets, config, options.signal, moreTargets)
+        // The main model must know that another model actually looked at the
+        // image, and which one, so its final answer can tell the user.
+        const notice = notices.length > 0
+          ? `[Auto Vision] ${notices.join(' ')} 请在最终答复中明确告知用户这次视觉模型切换或失败。`
+          : ''
+        const system = notice
+          ? [options.system, notice].filter(Boolean).join('\n\n')
+          : options.system
+        const request = notice ? { ...options, messages, system } : { ...options, messages }
         // A fresh request keeps the original route but carries text-only content.
         // Passing rewritten messages to `next()` does not work: the default
         // waterfall handler closes over the original options object.
-        yield* ctx.llm.stream({ ...options, messages })
+        yield* ctx.llm.stream(request)
       } catch (error) {
+        if (options.signal?.aborted) throw error
         console.warn(`[dsh-auto-vision] ${options.provider}/${options.model}: ${error instanceof Error ? error.message : String(error)}`)
         yield* next()
       }

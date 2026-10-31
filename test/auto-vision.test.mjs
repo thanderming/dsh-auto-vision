@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { apply } from '../index.js'
 
-function makeCtx({ models, visionText = 'A cat on a keyboard.', throwUnknown = false }) {
+function makeCtx({ models, visionText = 'A cat on a keyboard.', throwUnknown = false, failModels = [] }) {
   const calls = []
   const listeners = []
   const llm = {
@@ -24,7 +24,11 @@ function makeCtx({ models, visionText = 'A cat on a keyboard.', throwUnknown = f
     stream(options) {
       calls.push(options)
       return (async function* () {
-        const text = options.model === 'vision' ? visionText : 'main-ok'
+        if (failModels.includes(options.model)) {
+          yield { type: 'finish', reason: { kind: 'error', failure: { message: `${options.model} boom` } } }
+          return
+        }
+        const text = options.model.startsWith('vision') ? visionText : 'main-ok'
         yield { type: 'text-delta', index: 0, text }
         yield { type: 'finish', reason: { kind: 'stop' } }
       })()
@@ -208,11 +212,19 @@ test('registers the official catalog for the Settings picker', async () => {
 test('calls an official-list model directly when the adapter does not know it', async () => {
   const models = { 'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] } }
   const { ctx, calls, listeners } = makeCtx({ models, throwUnknown: true })
+  let mutation
   ctx.settings = {
     describe: () => [{
       ns: 'llm-pi-ai',
-      value: { providers: { p: { baseURL: 'https://api.example/v1', apiKeyEnv: 'P_KEY' } } },
+      value: { providers: { p: {
+        baseURL: 'https://api.example/v1',
+        apiKeyEnv: 'P_KEY',
+        models: [],
+      } } },
     }],
+    async mutate(ns, ops) {
+      mutation = { ns, ops }
+    },
   }
   ctx.credentials = { resolve: async () => ({ value: 'secret' }) }
   ctx.attachments = {
@@ -240,9 +252,220 @@ test('calls an official-list model directly when the adapter does not know it', 
     assert.equal(sent.messages[1].content[1].type, 'image_url')
     assert.equal(calls.length, 1)
     assert.match(calls[0].messages[0].content[1].text, /direct evidence/)
+    assert.equal(mutation.ns, 'llm-pi-ai')
+    assert.deepEqual(mutation.ops[0].value[0].input, ['text', 'image'])
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('keeps a configured vision model that the adapter knows as text-only', async () => {
+  const models = {
+    'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] },
+    'p/DeepSeek-V4-Flash-Vision-Exp': {
+      id: 'DeepSeek-V4-Flash-Vision-Exp',
+      provider: 'p',
+      inputModalities: ['text'],
+    },
+  }
+  const { ctx, calls, listeners } = makeCtx({ models })
+  let mutation
+  ctx.settings = {
+    describe: () => [{
+      ns: 'llm-pi-ai',
+      value: { providers: { p: {
+        baseURL: 'https://api.example/v1',
+        apiKeyEnv: 'P_KEY',
+        models: [{ id: 'DeepSeek-V4-Flash-Vision-Exp', name: 'DeepSeek-V4-Flash-Vision-Exp' }],
+      } } },
+    }],
+    async mutate(ns, ops) {
+      mutation = { ns, ops }
+    },
+  }
+  ctx.credentials = { resolve: async () => ({ value: 'secret' }) }
+  ctx.attachments = {
+    readImage: async () => ({ ref: { mediaType: 'image/png' }, data: Uint8Array.from([1, 2, 3]) }),
+  }
+  const originalFetch = globalThis.fetch
+  let sent
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, 'https://api.example/v1/chat/completions')
+    sent = JSON.parse(init.body)
+    return {
+      ok: true,
+      async text() {
+        return JSON.stringify({ choices: [{ message: { content: 'declared direct evidence' } }] })
+      },
+    }
+  }
+  try {
+    apply(ctx, { timeoutMs: 5000, visionProvider: 'p', visionModel: 'DeepSeek-V4-Flash-Vision-Exp' })
+    await drain(listeners[0](
+      { provider: 'p', model: 'text', messages: [imageMessage('What is this?', 'img-configured-text-only')] },
+      () => (async function* () { yield { type: 'text-delta', text: 'native' } })(),
+    ))
+    assert.equal(sent.model, 'DeepSeek-V4-Flash-Vision-Exp')
+    assert.equal(calls.length, 1)
+    assert.match(calls[0].messages[0].content[1].text, /declared direct evidence/)
+    assert.equal(mutation.ns, 'llm-pi-ai')
+    assert.deepEqual(mutation.ops[0].path, ['providers', 'p', 'models'])
+    assert.deepEqual(mutation.ops[0].value[0].input, ['text', 'image'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('falls back to another vision model and tells the main model about the switch', async () => {
+  const models = {
+    'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] },
+    'p/vision-bad': { id: 'vision-bad', provider: 'p', inputModalities: ['text', 'image'] },
+    'p/vision-good': { id: 'vision-good', provider: 'p', inputModalities: ['text', 'image'] },
+  }
+  const { ctx, calls, listeners } = makeCtx({ models, failModels: ['vision-bad'] })
+  apply(ctx, { timeoutMs: 5000, visionProvider: 'p', visionModel: 'vision-bad' })
+
+  await drain(listeners[0](
+    { provider: 'p', model: 'text', messages: [imageMessage('What is this?', 'img-fallback')] },
+    () => (async function* () { yield { type: 'text-delta', text: 'native' } })(),
+  ))
+
+  assert.deepEqual(calls.map((call) => call.model), ['vision-bad', 'vision-good', 'text'])
+  assert.match(calls[2].system, /图片 #1/)
+  assert.match(calls[2].system, /vision-bad/)
+  assert.match(calls[2].system, /vision-good/)
+  assert.match(calls[2].system, /最终答复/)
+  assert.match(calls[2].messages[0].content[1].text, /A cat on a keyboard/)
+  assert.match(calls[2].messages[0].content[1].text, /after p\/vision-bad failed/)
+})
+
+test('falls back to the official list after mounted vision models fail', async () => {
+  const models = {
+    'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] },
+    'p/vision-bad': { id: 'vision-bad', provider: 'p', inputModalities: ['text', 'image'] },
+  }
+  const { ctx, calls, listeners } = makeCtx({
+    models,
+    failModels: ['vision-bad'],
+    throwUnknown: true,
+  })
+  ctx.settings = {
+    describe: () => [{
+      ns: 'llm-pi-ai',
+      value: { providers: { p: { baseURL: 'https://api.example/v1', apiKeyEnv: 'P_KEY' } } },
+    }],
+  }
+  ctx.credentials = { resolve: async () => ({ value: 'secret' }) }
+  ctx.attachments = {
+    readImage: async () => ({ ref: { mediaType: 'image/png' }, data: Uint8Array.from([1, 2, 3]) }),
+  }
+  const originalFetch = globalThis.fetch
+  let sent
+  globalThis.fetch = async (url, init) => {
+    if (url === 'https://api.example/v1/models') {
+      return {
+        ok: true,
+        async json() {
+          return { data: [{ id: 'GLM-4.6V' }] }
+        },
+      }
+    }
+    assert.equal(url, 'https://api.example/v1/chat/completions')
+    sent = JSON.parse(init.body)
+    return {
+      ok: true,
+      async text() {
+        return JSON.stringify({ choices: [{ message: { content: 'official evidence' } }] })
+      },
+    }
+  }
+  try {
+    apply(ctx, { timeoutMs: 5000, visionProvider: 'p', visionModel: 'vision-bad' })
+    await drain(listeners[0](
+      { provider: 'p', model: 'text', messages: [imageMessage('What is this?', 'img-official-fallback')] },
+      () => (async function* () { yield { type: 'text-delta', text: 'native' } })(),
+    ))
+    assert.equal(sent.model, 'GLM-4.6V')
+    assert.deepEqual(calls.map((call) => call.model), ['vision-bad', 'text'])
+    assert.match(calls[1].system, /GLM-4\.6V/)
+    assert.match(calls[1].system, /vision-bad/)
+    assert.match(calls[1].messages[0].content[1].text, /official evidence/)
+    assert.match(calls[1].messages[0].content[1].text, /GLM-4\.6V/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('uses an official-list model when no mounted vision model exists', async () => {
+  const models = { 'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] } }
+  const { ctx, calls, listeners } = makeCtx({ models, throwUnknown: true })
+  ctx.settings = {
+    describe: () => [{
+      ns: 'llm-pi-ai',
+      value: { providers: { p: { baseURL: 'https://api.example/v1', apiKeyEnv: 'P_KEY' } } },
+    }],
+  }
+  ctx.credentials = { resolve: async () => ({ value: 'secret' }) }
+  ctx.attachments = {
+    readImage: async () => ({ ref: { mediaType: 'image/png' }, data: Uint8Array.from([1, 2, 3]) }),
+  }
+  const originalFetch = globalThis.fetch
+  let sent
+  globalThis.fetch = async (url, init) => {
+    if (url === 'https://api.example/v1/models') {
+      return {
+        ok: true,
+        async json() {
+          return { data: [{ id: 'GLM-4.6V' }] }
+        },
+      }
+    }
+    assert.equal(url, 'https://api.example/v1/chat/completions')
+    sent = JSON.parse(init.body)
+    return {
+      ok: true,
+      async text() {
+        return JSON.stringify({ choices: [{ message: { content: 'official evidence' } }] })
+      },
+    }
+  }
+  try {
+    apply(ctx, { timeoutMs: 5000 })
+    await drain(listeners[0](
+      { provider: 'p', model: 'text', messages: [imageMessage('What is this?', 'img-official-auto')] },
+      () => (async function* () { yield { type: 'text-delta', text: 'native' } })(),
+    ))
+    assert.equal(sent.model, 'GLM-4.6V')
+    assert.equal(calls.length, 1)
+    assert.match(calls[0].messages[0].content[1].text, /official evidence/)
+    assert.match(calls[0].messages[0].content[1].text, /GLM-4\.6V/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('tells the main model when every vision model fails', async () => {
+  const models = {
+    'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] },
+    'p/vision-bad': { id: 'vision-bad', provider: 'p', inputModalities: ['text', 'image'] },
+    'p/vision-worse': { id: 'vision-worse', provider: 'p', inputModalities: ['text', 'image'] },
+  }
+  const { ctx, calls, listeners } = makeCtx({
+    models,
+    failModels: ['vision-bad', 'vision-worse'],
+  })
+  apply(ctx, { timeoutMs: 5000, visionProvider: 'p', visionModel: 'vision-bad' })
+
+  await drain(listeners[0](
+    { provider: 'p', model: 'text', messages: [imageMessage('What is this?', 'img-all-fail')] },
+    () => (async function* () { yield { type: 'text-delta', text: 'native' } })(),
+  ))
+
+  assert.deepEqual(calls.map((call) => call.model), ['vision-bad', 'vision-worse', 'text'])
+  assert.match(calls[2].system, /所有视觉模型均调用失败/)
+  assert.match(calls[2].system, /vision-bad/)
+  assert.match(calls[2].system, /vision-worse/)
+  assert.match(calls[2].messages[0].content[1].text, /could not be interpreted by any vision model/)
 })
 
 test('advertises image input for text routes that have a vision sibling', async () => {
