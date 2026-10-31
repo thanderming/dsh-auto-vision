@@ -1,5 +1,7 @@
 # dsh-auto-vision
 
+[![npm 版本](https://img.shields.io/npm/v/dsh-auto-sight)](https://www.npmjs.com/package/dsh-auto-sight) [![npm 下载量](https://img.shields.io/npm/dm/dsh-auto-sight)](https://www.npmjs.com/package/dsh-auto-sight)
+
 [English](README.md) | **简体中文**
 
 让纯文本模型也能看图。当所选模型不支持图片输入时，**自动视觉**会调用同一 API 下可识别图片的模型读图，再把图片替换成那段描述，交给原模型完成这一次请求。
@@ -33,6 +35,8 @@ dsh plugin add github:thanderming/dsh-auto-vision
 ```
 
 也可以在插件市场里安装。
+
+同一份代码已发布到 npm：[`dsh-auto-sight`](https://www.npmjs.com/package/dsh-auto-sight)（`npm i dsh-auto-sight`）。npm 上是预构建产物——安装时不需要构建步骤，也不会触发 `allowBuilds` 授权——下载量可以在包页面看到。
 
 ## 设置
 

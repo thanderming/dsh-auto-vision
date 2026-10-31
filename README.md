@@ -1,5 +1,7 @@
 # dsh-auto-vision
 
+[![npm version](https://img.shields.io/npm/v/dsh-auto-sight)](https://www.npmjs.com/package/dsh-auto-sight) [![npm downloads](https://img.shields.io/npm/dm/dsh-auto-sight)](https://www.npmjs.com/package/dsh-auto-sight)
+
 **English** | [简体中文](README.zh-CN.md)
 
 Let a text-only model see images. When the selected model has no image input, **Auto Vision** asks a vision-capable model on the same provider to read each image, then sends the original request with that description in place of the image.
@@ -33,6 +35,8 @@ dsh plugin add github:thanderming/dsh-auto-vision
 ```
 
 Or install it from the plugin marketplace.
+
+The same code is published to npm as [`dsh-auto-sight`](https://www.npmjs.com/package/dsh-auto-sight) (`npm i dsh-auto-sight`). The npm build is prebuilt — no install-time build step or `allowBuilds` prompt — and its download count is visible on the package page.
 
 ## Settings
 
