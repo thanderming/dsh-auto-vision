@@ -72,7 +72,7 @@ Once a candidate successfully reads a real user image, the plugin writes `input:
 ## Development
 
 ```sh
-node --test test/auto-vision.test.mjs   # 14 tests, no network
+node --test test/auto-vision.test.mjs   # 16 tests, no network
 node test/client-render.mjs             # client Settings-page smoke test
 ```
 

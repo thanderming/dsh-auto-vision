@@ -100,6 +100,34 @@ test('leaves native vision routes untouched', async () => {
   assert.deepEqual(out, [{ type: 'text-delta', text: 'native' }])
 })
 
+test('bridges when the declared config says text-only even if resolveModelInfo claims image', async () => {
+  const models = {
+    'p/text': { id: 'text', provider: 'p', inputModalities: ['text', 'image'] },
+    'p/vision': { id: 'vision', provider: 'p', inputModalities: ['text', 'image'] },
+  }
+  const { ctx, calls, listeners } = makeCtx({ models })
+  ctx.settings = {
+    describe: () => [{
+      ns: 'llm-pi-ai',
+      value: { providers: { p: { models: [
+        { id: 'text' },
+        { id: 'vision', input: ['text', 'image'] },
+      ] } } },
+    }],
+  }
+  apply(ctx, { timeoutMs: 5000 })
+
+  await drain(listeners[0](
+    { provider: 'p', model: 'text', messages: [imageMessage('What is this?', 'img-declared-config')] },
+    () => (async function* () { yield { type: 'text-delta', text: 'native' } })(),
+  ))
+
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].model, 'vision')
+  assert.equal(calls[1].model, 'text')
+  assert.equal(calls[1].messages[0].content.some((block) => block.type === 'image'), false)
+})
+
 test('passes through when no vision model exists on the provider', async () => {
   const models = { 'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] } }
   const { ctx, calls, listeners } = makeCtx({ models })
@@ -466,6 +494,48 @@ test('tells the main model when every vision model fails', async () => {
   assert.match(calls[2].system, /vision-bad/)
   assert.match(calls[2].system, /vision-worse/)
   assert.match(calls[2].messages[0].content[1].text, /could not be interpreted by any vision model/)
+})
+
+test('advertises image input from a declared profile model when the adapter catalog is empty', async () => {
+  const models = { 'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] } }
+  const { ctx } = makeCtx({ models })
+  ctx.settings = {
+    describe: () => [{
+      ns: 'llm-pi-ai',
+      value: { providers: { p: {
+        baseURL: 'https://api.example/v1',
+        apiKeyEnv: 'P_KEY',
+        models: [{ id: 'GLM-4.6V', name: 'GLM-4.6V', input: ['text', 'image'] }],
+      } } },
+    }],
+  }
+  apply(ctx, {})
+  const info = await ctx.llm.resolveModelInfo('p', 'text')
+  assert.deepEqual(info.inputModalities, ['text', 'image'])
+})
+
+test('advertises image input from the official list when nothing is mounted', async () => {
+  const models = { 'p/text': { id: 'text', provider: 'p', inputModalities: ['text'] } }
+  const { ctx } = makeCtx({ models })
+  ctx.settings = {
+    describe: () => [{
+      ns: 'llm-pi-ai',
+      value: { providers: { p: { baseURL: 'https://api.example/v1', apiKeyEnv: 'P_KEY', models: [] } } },
+    }],
+  }
+  ctx.credentials = { resolve: async () => ({ value: 'secret' }) }
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    assert.equal(url, 'https://api.example/v1/models')
+    return { ok: true, async json() { return { data: [{ id: 'GLM-4.6V' }] } } }
+  }
+  try {
+    apply(ctx, {})
+    const info = await ctx.llm.resolveModelInfo('p', 'text')
+    assert.deepEqual(info.inputModalities, ['text', 'image'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('advertises image input for text routes that have a vision sibling', async () => {

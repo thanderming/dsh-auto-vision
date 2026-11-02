@@ -133,6 +133,20 @@ function providerProfile(ctx, provider) {
   }
 }
 
+/**
+ * The adapter's prepared call and `resolveModelInfo` can disagree: the
+ * prepared call is built from the declared config, while the overlay sees a
+ * catalog-derived image modality. The declared config is the route that will
+ * actually run, so trust it when it exists.
+ */
+function declaredImageInput(ctx, provider, model) {
+  const profile = providerProfile(ctx, provider)
+  const models = Array.isArray(profile?.models) ? profile.models : null
+  if (models === null) return null
+  const entry = models.find((item) => item?.id === model)
+  return Array.isArray(entry?.input) ? entry.input.includes('image') : false
+}
+
 const remembering = new Set()
 
 /**
@@ -240,6 +254,22 @@ async function discoverTargets(ctx, provider, model, exclude) {
   return targets
 }
 
+/** Image-capable models already declared in the provider profile. */
+function configuredVisionTargets(ctx, provider, model, exclude) {
+  const profile = providerProfile(ctx, provider)
+  const models = Array.isArray(profile?.models) ? profile.models : []
+  return models
+    .filter((entry) => entry?.id && entry.id !== model && !exclude.has(entry.id))
+    .filter((entry) => Array.isArray(entry.input) && entry.input.includes('image'))
+    .map((entry) => ({
+      provider,
+      model: entry.id,
+      displayName: entry.name || entry.id,
+      direct: true,
+      undeclared: true,
+    }))
+}
+
 async function validateTarget(nativeResolve, candidate, provider, signal) {
   if (!candidate?.provider || !candidate?.model) return null
   if (candidate.provider !== provider) return null // same API only
@@ -294,11 +324,25 @@ async function resolveTargets(ctx, config, nativeResolve, provider, model, signa
       seen.add(target.model)
     }
   }
+  for (const candidate of configuredVisionTargets(ctx, provider, model, seen)) {
+    if (seen.has(candidate.model)) continue
+    const target = await validateTarget(nativeResolve, candidate, provider, signal)
+    if (target !== null) {
+      targets.push(target)
+      seen.add(target.model)
+    }
+  }
   return targets
 }
 
 async function resolveTarget(ctx, config, nativeResolve, provider, model, signal) {
-  return (await resolveTargets(ctx, config, nativeResolve, provider, model, signal))[0] || null
+  const targets = await resolveTargets(ctx, config, nativeResolve, provider, model, signal)
+  if (targets.length > 0) return targets[0]
+  // Fresh installs can see an empty adapter catalog until the first config
+  // write. The official list does not depend on that snapshot, so admission
+  // can still advertise image input and the stream bridge can fall back to it.
+  const official = await resolveOfficialTargets(ctx, provider, model, new Set(), signal)
+  return official[0] || null
 }
 
 /** Last-resort candidates from the provider's official `/models` list. */
@@ -555,7 +599,8 @@ function installStreamBridge(ctx, config, nativeResolve) {
         yield* next()
         return
       }
-      if (isVisionModel(nativeInfo)) {
+      const declared = declaredImageInput(ctx, options.provider, options.model)
+      if (declared !== false && isVisionModel(nativeInfo)) {
         yield* next()
         return
       }

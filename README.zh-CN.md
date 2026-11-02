@@ -72,7 +72,7 @@ dsh plugin add github:thanderming/dsh-auto-vision
 ## 开发
 
 ```sh
-node --test test/auto-vision.test.mjs   # 14 个测试，不联网
+node --test test/auto-vision.test.mjs   # 16 个测试，不联网
 node test/client-render.mjs             # 客户端设置页 smoke test
 ```
 
