@@ -4,7 +4,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Let a text-only model see images. When the selected model has no image input, **Auto Vision** asks a vision-capable model on the same provider to read each image, then sends the original request with that description in place of the image.
+Let a text-only model see images. When the selected model has no image input, or recognition is unusable (for example the call fails or returns nothing), **Auto Vision** asks another image-capable model on the same provider to read each image, then sends the original request with that description in place of the image.
 
 A DSH plugin. No API keys are stored in or sent by the plugin itself — it uses the credential your provider config already points at.
 
@@ -18,6 +18,7 @@ A DSH plugin. No API keys are stored in or sent by the plugin itself — it uses
 
 - Hooks `llm/stream`: if a request carries image blocks and the selected route is text-only, each image is read by a vision model on the **same provider** and replaced with a text block `[Image #n interpreted by <model>] … [/Image #n]`.
 - Only steps in when all three are true: the request has at least one `image` block, the main route does not declare `image`, and a vision target resolves on the same provider. Otherwise it passes through untouched.
+- If the main model can already see images, it passes through by default. Select a vision model and enable *Use the vision model even when the main model can see images* to have that model read first anyway. The switch has no effect when no vision model is selected.
 - Target order: the model chosen in Settings → other mounted image-capable models on the same provider → name-matched candidates from the official `/models` list. The next group is tried only when the previous one is unavailable or has failed.
 - If the chosen vision model fails, tries the remaining targets in order; the block is marked `after <failed model> failed`. A system notice asks the main model to tell the user which model failed and which one was used.
 - If every mounted vision model fails, queries the provider's official `/models` list, keeps name-matched candidates, and tries them over the direct endpoint. The official list has no modality metadata, so these candidates are not guaranteed to accept images.
@@ -40,11 +41,12 @@ The same code is published to npm as [`dsh-auto-sight`](https://www.npmjs.com/pa
 
 ## Settings
 
-**Settings → Auto Vision**: pick the vision model (grouped per provider), or leave it on *Automatic*. The selection is stored in volatile config and applies to the next image request.
+**Settings → Auto Vision**: pick the vision model (grouped per provider), or leave it on *Automatic*. The selection is stored in volatile config and applies to the next image request. After selecting a vision model, you can enable *Use the vision model even when the main model can see images*; it has no effect while no model is selected.
 
 | Config key | Default | Meaning |
 | --- | --- | --- |
 | `visionProvider` / `visionModel` | empty = auto | Model to read images with. A selection made for another provider is ignored; the plugin discovers a target on the provider handling the request instead. |
+| `preferVisionModel` | `false` | Use the selected vision model even when the main model can see images; only applies when a vision model is selected. |
 | `timeoutMs` | `60000` | Per-image read timeout. |
 
 The picker has three groups:
@@ -72,7 +74,7 @@ Once a candidate successfully reads a real user image, the plugin writes `input:
 ## Development
 
 ```sh
-node --test test/auto-vision.test.mjs   # 16 tests, no network
+node --test test/auto-vision.test.mjs   # 19 tests, no network
 node test/client-render.mjs             # client Settings-page smoke test
 ```
 

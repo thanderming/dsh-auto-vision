@@ -10,6 +10,8 @@ window.__ModuleLoader__.load({
       title: '自动视觉',
       intro: '主模型不能识别图片时，自动改用同一 API 下可识别图片的模型读取图片，再把描述反馈给主模型。',
       target: '视觉模型',
+      prefer: '主模型支持图片时仍优先使用视觉模型',
+      preferHint: '仅在已指定视觉模型时生效。关闭后，支持图片输入的主模型会直接读图；开启后会先让所选视觉模型识别，再把描述交给主模型。',
       auto: '自动（使用该 API 中第一个支持图片的模型）',
       hint: '保证组只显示 DSH 配置里声明了 input: [text, image] 的模型。官方 /models 接口不返回模态信息；勾选后可查看仅按名称猜出的官方候选，不保证能调用。调用失败会先试同一 API 的其他视觉模型，再试官方清单候选，并在最终答复中说明。',
       refresh: '刷新模型列表',
@@ -29,6 +31,8 @@ window.__ModuleLoader__.load({
       title: 'Auto Vision',
       intro: 'When the main model cannot see images, a vision model on the same API reads them first and its description is fed back.',
       target: 'Vision model',
+      prefer: 'Use the vision model even when the main model can see images',
+      preferHint: 'Only applies when a vision model is selected. Off: an image-capable main model reads images directly. On: the selected vision model reads first and its description is passed on.',
       auto: 'Automatic (first image-capable model on this API)',
       hint: 'The guaranteed group only shows models whose DSH config declares input: [text, image]. The official /models endpoint exposes no modality metadata; tick below to see name-matched official candidates, which are not guaranteed to work. On failure the plugin tries other mounted vision models, then official candidates, and reports the switch in the final answer.',
       refresh: 'Refresh models',
@@ -195,6 +199,7 @@ window.__ModuleLoader__.load({
           ns: view.ns,
           revision: view.revision,
           current: model ? routeKey(owner, model) : '',
+          prefer: view.value?.preferVisionModel === true,
           providers: groupModels(providers),
         })
       }, [])
@@ -223,6 +228,30 @@ window.__ModuleLoader__.load({
             ...previous,
             revision: answer.value.revision,
             current: savedModel ? routeKey(savedProvider, savedModel) : '',
+          }))
+          setNotice({ kind: 'ok', text: t('saved') })
+        } catch (error) {
+          setNotice({ kind: 'error', text: `${t('saveFailed')}: ${error.message}` })
+        } finally {
+          setSaving(false)
+        }
+      }
+
+      async function togglePrefer(event) {
+        const value = event.target.checked
+        setSaving(true)
+        setNotice(null)
+        try {
+          const answer = await ctx.remote.settings.mutate(
+            state.ns,
+            [{ op: 'set', path: ['preferVisionModel'], value }],
+            state.revision,
+          )
+          if (!answer.ok) throw new Error(answer.error.message)
+          setState((previous) => ({
+            ...previous,
+            revision: answer.value.revision,
+            prefer: answer.value.value?.preferVisionModel === true,
           }))
           setNotice({ kind: 'ok', text: t('saved') })
         } catch (error) {
@@ -302,6 +331,25 @@ window.__ModuleLoader__.load({
             }, options),
           ),
           h('p', { style: hint }, t('hint')),
+          h('label', {
+            style: {
+              ...hint,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              cursor: state.current ? 'pointer' : 'not-allowed',
+              opacity: state.current ? 1 : 0.5,
+            },
+          },
+            h('input', {
+              type: 'checkbox',
+              checked: state.prefer,
+              disabled: saving || !state.current,
+              onChange: togglePrefer,
+            }),
+            t('prefer'),
+          ),
+          h('p', { style: hint }, t('preferHint')),
           hasCandidates ? h('label', {
             style: { ...hint, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' },
           },

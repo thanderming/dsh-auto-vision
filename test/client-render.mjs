@@ -77,7 +77,8 @@ const ctx = {
       },
       async mutate(ns, ops, revision) {
         mutation = { ns, ops, revision }
-        return { ok: true, value: { ns, revision: revision + 1, value: { visionProvider: 'q', visionModel: 'vision2' } } }
+        const preferred = ops.find((op) => op.path[0] === 'preferVisionModel')?.value === true
+        return { ok: true, value: { ns, revision: revision + 1, value: { visionProvider: 'q', visionModel: 'vision2', preferVisionModel: preferred } } }
       },
     },
     llm: {
@@ -138,7 +139,11 @@ const optionValues = findAll(tree, 'option').map((option) => option.props.value)
 assert.deepEqual(optionValues, [
   '', 'p|vision', 'q|vision2', 'p|DeepSeek-V4-Flash-Vision-Exp',
 ])
-const checkbox = findAll(tree, 'input').find((node) => node.props.type === 'checkbox')
+const switches = findAll(tree, 'input').filter((node) => node.props.type === 'checkbox')
+assert.equal(switches.length, 2, 'prefer + candidate toggles rendered')
+assert.equal(switches[0].props.checked, false)
+assert.equal(switches[0].props.disabled, false)
+const checkbox = switches[switches.length - 1]
 assert.ok(checkbox, 'candidate toggle rendered')
 checkbox.props.onChange({ target: { checked: true } })
 assert.ok(findAll(render(), 'option').some((option) => option.props.value === 'p|GLM-4.6V'))
@@ -155,4 +160,14 @@ assert.deepEqual(mutation, {
 const after = render()
 assert.equal(findAll(after, 'select')[0].props.value, 'q|vision2')
 assert.ok(findAll(after, 'span').some((node) => node.props.children.flat().join('') === 'Saved'))
+
+const preferSwitch = findAll(after, 'input').filter((node) => node.props.type === 'checkbox')[0]
+await preferSwitch.props.onChange({ target: { checked: true } })
+assert.deepEqual(mutation, {
+  ns: 'auto-vision',
+  ops: [{ op: 'set', path: ['preferVisionModel'], value: true }],
+  revision: 4,
+})
+const preferOn = findAll(render(), 'input').filter((node) => node.props.type === 'checkbox')[0]
+assert.equal(preferOn.props.checked, true)
 console.log('client smoke ok')

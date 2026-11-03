@@ -19,6 +19,7 @@ export const Config = z.object({
   timeoutMs: z.number().default(60_000),
   visionProvider: z.string().default('').volatile(),
   visionModel: z.string().default('').volatile(),
+  preferVisionModel: z.boolean().default(false).volatile(),
 })
 
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -100,6 +101,12 @@ function configuredTarget(config, provider) {
   // A model chosen from the official list may not be mounted in this adapter's
   // catalog yet. Mark it so the direct HTTP path can still call it.
   return { provider, model: model.trim(), direct: true }
+}
+
+/** The switch only has meaning when a specific vision model is selected. */
+function preferSelectedVision(config, provider) {
+  if (configValue(config?.preferVisionModel) !== true) return null
+  return configuredTarget(config, provider)
 }
 
 const OFFICIAL_DISCOVERY_NS = 'auto-vision'
@@ -600,7 +607,9 @@ function installStreamBridge(ctx, config, nativeResolve) {
         return
       }
       const declared = declaredImageInput(ctx, options.provider, options.model)
-      if (declared !== false && isVisionModel(nativeInfo)) {
+      const preferred = preferSelectedVision(config, options.provider)
+      const preferVision = preferred !== null && preferred.model !== options.model
+      if (!preferVision && declared !== false && isVisionModel(nativeInfo)) {
         yield* next()
         return
       }

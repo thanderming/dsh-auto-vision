@@ -86,6 +86,39 @@ test('routes images through a same-provider vision model before the text model',
   assert.equal(out[0].text, 'main-ok')
 })
 
+test('prefers the selected vision model even when the main model can see images', async () => {
+  const models = {
+    'p/main': { id: 'main', provider: 'p', inputModalities: ['text', 'image'] },
+    'p/vision': { id: 'vision', provider: 'p', inputModalities: ['text', 'image'] },
+  }
+  const { ctx, calls, listeners } = makeCtx({ models })
+  apply(ctx, { timeoutMs: 5000, visionProvider: 'p', visionModel: 'vision', preferVisionModel: true })
+
+  const out = await drain(listeners[0](
+    { provider: 'p', model: 'main', messages: [imageMessage('What is this?', 'img-prefer')] },
+    () => (async function* () { yield { type: 'text-delta', text: 'native' } })(),
+  ))
+
+  assert.deepEqual(calls.map((call) => call.model), ['vision', 'main'])
+  assert.equal(calls[0].messages[0].content[1].type, 'image')
+  assert.equal(calls[1].messages[0].content.some((block) => block.type === 'image'), false)
+  assert.equal(out[0].text, 'main-ok')
+})
+
+test('the prefer switch has no effect without a selected vision model', async () => {
+  const models = { 'p/main': { id: 'main', provider: 'p', inputModalities: ['text', 'image'] } }
+  const { ctx, calls, listeners } = makeCtx({ models })
+  apply(ctx, { preferVisionModel: true })
+
+  const out = await drain(listeners[0](
+    { provider: 'p', model: 'main', messages: [imageMessage()] },
+    () => (async function* () { yield { type: 'text-delta', text: 'native' } })(),
+  ))
+
+  assert.deepEqual(out, [{ type: 'text-delta', text: 'native' }])
+  assert.equal(calls.length, 0)
+})
+
 test('leaves native vision routes untouched', async () => {
   const models = {
     'p/vision': { id: 'vision', provider: 'p', inputModalities: ['text', 'image'] },
